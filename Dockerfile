@@ -1,10 +1,20 @@
-FROM python:3.8
+# Use an official Python runtime as a parent image
+FROM python:3.9-slim
 
-EXPOSE 8080
+# Set the working directory in the container
 WORKDIR /app
 
-COPY . ./
+# Copy the current directory contents into the container at /app
+COPY . /app
 
-RUN pip install -r requirements.txt
+# Install any necessary dependencies specified in requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-ENTRYPOINT ["streamlit", "run", "app.py", "--server.port=8080", "--server.address=0.0.0.0"]
+# Expose the port FastAPI will run on
+EXPOSE 8000
+
+# Define environment variable for Google Cloud
+ENV GOOGLE_APPLICATION_CREDENTIALS="/app/service-account-key.json"
+
+# Run FastAPI application with Uvicorn
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
