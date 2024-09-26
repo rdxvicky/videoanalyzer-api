@@ -1,7 +1,7 @@
-streamlit
 google-cloud-aiplatform
-google-generativeai
+google-cloud-logging
 fastapi
+google-generativeai
 uvicorn
 moviepy
 pydantic
