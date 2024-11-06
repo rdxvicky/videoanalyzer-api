@@ -2,10 +2,11 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import os
 import vertexai
-from vertexai.preview.generative_models import GenerativeModel, Part
+from vertexai.preview.generative_models import GenerativeModel, Part, GenerationConfig
 import tempfile
 import requests
 from moviepy.editor import VideoFileClip
+import json
 
 # Initialize FastAPI
 app = FastAPI()
@@ -71,21 +72,34 @@ def convert_video_to_part(video_path):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error converting video to Part: {e}")
 
-# Helper function to generate content using the model
-def generate_content(model: GenerativeModel, prompt: str, video_part: Part) -> dict:
+# Function to clean messy model output and ensure valid JSON
+def clean_response(messy_response: list) -> dict:
+    # Join response fragments and parse as JSON
+    try:
+        combined_response = "".join(messy_response)
+        cleaned_response = json.loads(combined_response)
+        return cleaned_response
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Failed to parse model response as valid JSON.")
+
+# Helper function to generate structured content using the model
+def generate_content(model: GenerativeModel, prompt: str, video_part: Part, schema: dict) -> dict:
     try:
         response = model.generate_content(
             [prompt, video_part],
-            generation_config={
-                "temperature": 0.1,
-                "max_output_tokens": 2048
-            },
+            generation_config=GenerationConfig(
+                response_mime_type="application/json",
+                response_schema=schema,
+                temperature=0.1,
+                max_output_tokens=2048
+            ),
             stream=True
         )
-        final_response = [resp.text for resp in response if resp.text]
-        if not final_response:
+        # Clean and structure response data
+        messy_response = [resp.text for resp in response if resp.text]
+        if not messy_response:
             raise ValueError("Model returned an empty response.")
-        return {"data": final_response}
+        return clean_response(messy_response)
     except Exception as e:
         raise RuntimeError(f"Content generation failed: {e}")
 
@@ -93,440 +107,508 @@ def generate_content(model: GenerativeModel, prompt: str, video_part: Part) -> d
 async def read_root():
     return {"message": "Welcome to Paigeon Video Analyzer"}
 
-# Improved prompts and structured JSON output for different endpoints
+# Define schemas for each endpoint
 
-# 1. Tags Endpoint
+# 1. Tags Endpoint Schema
+tags_schema = {
+    "type": "object",
+    "properties": {
+        "tags": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "tag": {"type": "string"},
+                    "probability": {"type": "number"}
+                },
+                "required": ["tag", "probability"]
+            }
+        }
+    }
+}
+
+# 2. Emotion Detection Schema
+emotions_schema = {
+    "type": "object",
+    "properties": {
+        "emotions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "emotion": {"type": "string"},
+                    "time_frame": {"type": "string"},
+                    "context": {"type": "string"}
+                },
+                "required": ["emotion", "time_frame"]
+            }
+        }
+    }
+}
+
+# 3. Description Schema
+description_schema = {
+    "type": "object",
+    "properties": {
+        "description": {"type": "string"},
+    }
+}
+
+# 4. Scene Segmentation Schema
+scene_segmentation_schema = {
+    "type": "object",
+    "properties": {
+        "scenes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "start_time": {"type": "string"},
+                    "end_time": {"type": "string"}
+                },
+                "required": ["description", "start_time", "end_time"]
+            }
+        }
+    }
+}
+
+# 5. Transcription Schema
+transcription_schema = {
+    "type": "object",
+    "properties": {
+        "transcriptions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "time_frame": {"type": "string"}
+                },
+                "required": ["text", "time_frame"]
+            }
+        }
+    }
+}
+
+# 6. Highlights Schema
+highlights_schema = {
+    "type": "object",
+    "properties": {
+        "highlights": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "time_frame": {"type": "string"}
+                },
+                "required": ["description", "time_frame"]
+            }
+        }
+    }
+}
+
+# 7. Shopping Items Schema
+shopping_schema = {
+    "type": "object",
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "item": {"type": "string"},
+                    "time_frame": {"type": "string"}
+                },
+                "required": ["item", "time_frame"]
+            }
+        }
+    }
+}
+
+# 8. Action Recognition Schema
+actions_schema = {
+    "type": "object",
+    "properties": {
+        "actions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string"},
+                    "time_frame": {"type": "string"}
+                },
+                "required": ["action", "time_frame"]
+            }
+        }
+    }
+}
+
+# 9. Sentiment Analysis Schema
+sentiment_schema = {
+    "type": "object",
+    "properties": {
+        "sentiment": {"type": "string"},
+        "examples": {
+            "type": "array",
+            "items": {"type": "string"}
+        }
+    }
+}
+
+# 10. Language Detection Schema
+language_detection_schema = {
+    "type": "object",
+    "properties": {
+        "languages": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "language": {"type": "string"},
+                    "time_frame": {"type": "string"}
+                },
+                "required": ["language", "time_frame"]
+            }
+        }
+    }
+}
+
+# 11. Keywords Schema
+keywords_schema = {
+    "type": "object",
+    "properties": {
+        "keywords": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string"},
+                    "importance_score": {"type": "number"}
+                },
+                "required": ["keyword", "importance_score"]
+            }
+        }
+    }
+}
+
+# 12. OCR Schema
+ocr_schema = {
+    "type": "object",
+    "properties": {
+        "texts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "time_frame": {"type": "string"}
+                },
+                "required": ["text", "time_frame"]
+            }
+        }
+    }
+}
+
+# 13. Brand Logos Schema
+brand_logos_schema = {
+    "type": "object",
+    "properties": {
+        "logos": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "brand": {"type": "string"},
+                    "time_frame": {"type": "string"}
+                },
+                "required": ["brand", "time_frame"]
+            }
+        }
+    }
+}
+
+# 14. Social Media Summary Schema
+social_media_summary_schema = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"}
+    }
+}
+
+# 15. Visual Style Schema
+visual_style_schema = {
+    "type": "object",
+    "properties": {
+        "style": {"type": "string"},
+        "elements": {"type": "array", "items": {"type": "string"}}
+    }
+}
+
+# 16. Anomalies Schema
+anomalies_schema = {
+    "type": "object",
+    "properties": {
+        "anomalies": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "time_frame": {"type": "string"}
+                },
+                "required": ["description", "time_frame"]
+            }
+        }
+    }
+}
+
+# 17. Gesture Recognition Schema
+gestures_schema = {
+    "type": "object",
+    "properties": {
+        "gestures": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "gesture": {"type": "string"},
+                    "time_frame": {"type": "string"}
+                },
+                "required": ["gesture", "time_frame"]
+            }
+        }
+    }
+}
+
+# 18. Topics/Genres Schema
+topics_schema = {
+    "type": "object",
+    "properties": {
+        "topics": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string"},
+                    "subtopics": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    }
+                },
+                "required": ["topic"]
+            }
+        }
+    }
+}
+
+# 19. Content Moderation Schema
+moderation_schema = {
+    "type": "object",
+    "properties": {
+        "violations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string"},
+                    "time_frame": {"type": "string"}
+                },
+                "required": ["type", "time_frame"]
+            }
+        }
+    }
+}
+
+# 20. Contextual Ad Placement Schema
+ad_placement_schema = {
+    "type": "object",
+    "properties": {
+        "ads": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "description": {"type": "string"},
+                    "placement_time": {"type": "string"}
+                },
+                "required": ["description", "placement_time"]
+            }
+        }
+    }
+}
+
+# Endpoints with improved prompts
+
 @app.post("/analyze-video/tags", response_model=VideoAnalysisResponse)
 async def generate_tags(request: VideoAnalysisRequest):
-    """
-    Generate relevant and popular tags for the video content with probabilities.
-    """
     prompt = (
-        "Based on the video content, generate a list of 10 relevant tags that accurately describe the main themes, objects, actions, and concepts present. "
-        "For each tag, provide a probability score between 0 and 1 indicating its relevance and prominence in the video. "
-        "Structure the output as a JSON array of objects, each containing a 'tag' and a 'probability' field. "
-        "Ensure tags are specific, varied, and cover different aspects of the video content."
+        "Generate a list of relevant tags that best describe the main themes, objects, actions, and concepts in the video. "
+        "Include a probability score for each tag's relevance. If there are no suitable tags, indicate that the content is general and untaggable."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, tags_schema)
 
-# 2. Emotion Detection Endpoint
 @app.post("/analyze-video/emotions", response_model=VideoAnalysisResponse)
 async def detect_emotions(request: VideoAnalysisRequest):
-    """
-    Identify and describe the emotions displayed by individuals in the video, with time frames.
-    """
     prompt = (
-        "Analyze the provided video data to identify emotions displayed by individuals. "
-        "Focus on facial expressions, body language, and context to infer emotional states. "
-        "For each identified emotion, provide:\n"
-        "1. A description of the emotion (e.g., joy, anger, surprise)\n"
-        "2. Any relevant context or cause for the emotion\n"
-        "3. An approximate time frame (in seconds) when the emotion is observed\n"
-        "Structure the response as a list of emotional observations, each with these three elements. "
-        "If no clear emotions are detectable, state this and provide possible reasons why."
+        "Analyze the video for visible emotions expressed by individuals through facial expressions and body language. "
+        "List each emotion with a time frame and context where relevant. If no clear emotions are detected, state that the individuals are neutral or difficult to interpret."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, emotions_schema)
 
-# 3. Description Endpoint
 @app.post("/analyze-video/description", response_model=VideoAnalysisResponse)
 async def analyze_description(request: VideoAnalysisRequest):
-    """
-    Generate a detailed description of the video content.
-    """
     prompt = (
-        "Analyze the provided video data and generate a comprehensive description of its content. "
-        "Focus on:\n"
-        "1. The main subject or theme of the video\n"
-        "2. Key events or actions that occur, with approximate time frames (in seconds)\n"
-        "3. Notable visual elements, such as setting, characters, or objects\n"
-        "4. Any significant audio elements, including dialogue, music, or sound effects\n"
-        "5. The overall mood or tone of the video\n"
-        "Provide a coherent narrative that captures these elements, giving the reader a clear understanding of the video's content without having viewed it directly."
+        "Generate a comprehensive description of the video's content, including main subjects, actions, visual elements, and tone. "
+        "If the content is too abstract to describe, state that clearly."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, description_schema)
 
-# 4. Scene Segmentation Endpoint
 @app.post("/analyze-video/scene-segmentation", response_model=VideoAnalysisResponse)
 async def segment_scenes(request: VideoAnalysisRequest):
-    """
-    Break down the video into distinct scenes and provide a description for each, with time frames.
-    """
     prompt = (
-        "Analyze the provided video data to segment it into distinct scenes. For each scene:\n"
-        "1. Provide a brief description of the scene's content and action\n"
-        "2. Note any significant changes in setting, characters, or tone\n"
-        "3. Include approximate start and end times (in seconds)\n"
-        "4. Highlight any key moments or turning points within the scene\n"
-        "Present the scenes in chronological order, ensuring that the segmentation captures the video's narrative or structural flow. "
-        "If there are no clear scene changes, describe the video's content in meaningful segments based on action or subject matter."
+        "Break down the video into distinct scenes with start and end times, and a brief description for each. "
+        "If the video is one continuous scene, indicate that."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, scene_segmentation_schema)
 
-# 5. Transcription Endpoint
 @app.post("/analyze-video/transcription", response_model=VideoAnalysisResponse)
 async def transcribe_video(request: VideoAnalysisRequest):
-    """
-    Provide a complete and accurate transcription of all spoken words in the video.
-    """
     prompt = (
-        "Analyze the provided video and transcribe all spoken words, capturing dialogues, speeches, and verbal interactions. "
-        "Include time stamps (in seconds) for when each speech segment begins."
+        "Provide a transcription of all spoken words in the video, with timestamps for each segment. "
+        "If there is no spoken content, indicate this."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, transcription_schema)
 
-# 6. Highlights Endpoint
 @app.post("/analyze-video/highlights", response_model=VideoAnalysisResponse)
 async def summarize_highlights(request: VideoAnalysisRequest):
-    """
-    Summarize the key highlights and important moments of the video.
-    """
     prompt = (
-        "Based on the video content, identify and summarize the key highlights and important moments. "
-        "For each highlight, provide a brief description and a time frame (in seconds) for when it occurs."
+        "Identify the key highlights of the video, with brief descriptions and time frames. "
+        "If no particular highlights stand out, describe the video as evenly paced."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, highlights_schema)
 
-# 7. Shopping Items Endpoint
 @app.post("/analyze-video/shopping", response_model=VideoAnalysisResponse)
 async def identify_shopping_items(request: VideoAnalysisRequest):
-    """
-    Identify objects in the video that could be linked to online shopping.
-    """
     prompt = (
-        "Analyze the provided video content to identify any products, clothing, accessories, or other objects that could be of interest for online shopping. "
-        "For each object, provide a brief description and the time frame (in seconds) when it appears."
+        "Identify any products, clothing, or accessories in the video that could be of interest for online shopping. "
+        "Provide a brief description and time frame for each item. If no such items are present, indicate this."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, shopping_schema)
 
-# 8. Action Recognition Endpoint with Time Frames
 @app.post("/analyze-video/actions", response_model=VideoAnalysisResponse)
 async def recognize_actions(request: VideoAnalysisRequest):
-    """
-    Describe the main actions or activities occurring in the video with time frames.
-    """
     prompt = (
-        "Analyze the video data and describe the main actions and activities occurring in the video. Include start and end timestamps (in seconds) for each action."
+        "Describe the main actions or activities occurring in the video, with start and end timestamps for each. "
+        "If the video is primarily static, state this."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, actions_schema)
 
-# 9. Sentiment Analysis Endpoint
 @app.post("/analyze-video/sentiment", response_model=VideoAnalysisResponse)
 async def analyze_sentiment(request: VideoAnalysisRequest):
-    """
-    Analyze the overall sentiment and emotional tone conveyed in the video.
-    """
     prompt = (
         "Analyze the overall sentiment and emotional tone of the video, such as positive, negative, or neutral. "
-        "Provide examples from the video to support your analysis."
+        "If the sentiment is ambiguous or neutral, indicate this clearly."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, sentiment_schema)
 
-# 10. Language Detection Endpoint
 @app.post("/analyze-video/language-detection", response_model=VideoAnalysisResponse)
 async def detect_language(request: VideoAnalysisRequest):
-    """
-    Identify all languages spoken in the video.
-    """
     prompt = (
-        "Identify all the languages spoken in the video, including any accents or dialects. "
-        "Provide the time frames where different languages are used."
+        "Identify the languages spoken in the video, with time frames where each language is used. "
+        "If no spoken language is detected, indicate that there is no audio or spoken content."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, language_detection_schema)
 
-# 11. Keyword Extraction Endpoint
 @app.post("/analyze-video/keywords", response_model=VideoAnalysisResponse)
 async def extract_keywords(request: VideoAnalysisRequest):
-    """
-    Extract key phrases and keywords that summarize the video's content, with importance scores.
-    """
     prompt = (
-        "Extract key phrases and keywords that summarize the video's content. "
-        "For each keyword, provide an importance score between 0 and 1, and explain its relevance briefly."
+        "Extract key phrases and keywords summarizing the video content. Provide an importance score and brief explanation for each. "
+        "If there are no specific keywords, describe the video as generic or unremarkable in this regard."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, keywords_schema)
 
-# 12. Optical Character Recognition (OCR) Endpoint
 @app.post("/analyze-video/ocr", response_model=VideoAnalysisResponse)
 async def extract_text(request: VideoAnalysisRequest):
-    """
-    Extract all text displayed within the video frames.
-    """
     prompt = (
-        "Extract all visible text displayed within the video frames, such as signs, labels, subtitles, and any other on-screen text. "
-        "Provide the text content along with the time frames (in seconds) when they appear."
+        "Extract all visible text displayed within the video frames, with time frames where each text appears. "
+        "If no text is visible, indicate that the video contains no readable text."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, ocr_schema)
 
-# 13. Brand Logo Detection Endpoint
 @app.post("/analyze-video/brand-logos", response_model=VideoAnalysisResponse)
 async def detect_brand_logos(request: VideoAnalysisRequest):
-    """
-    Identify any brand logos or trademarks appearing in the video.
-    """
     prompt = (
-        "Identify any brand logos, trademarks, or recognizable brand elements appearing in the video. "
-        "For each, provide the time frames (in seconds) when they appear."
+        "Identify any brand logos or trademarks appearing in the video, with time frames for each. "
+        "If no logos are visible, indicate that the video does not contain identifiable brands."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, brand_logos_schema)
 
-# 14. Summarization for Social Media Endpoint
 @app.post("/analyze-video/social-media-summary", response_model=VideoAnalysisResponse)
 async def social_media_summary(request: VideoAnalysisRequest):
-    """
-    Create a short and engaging summary suitable for sharing on social media platforms.
-    """
     prompt = (
-        "Create a short, engaging, and catchy summary of the video suitable for sharing on social media platforms. "
-        "The summary should capture the essence and highlights of the video in a way that attracts viewers."
+        "Generate a short, engaging summary of the video suitable for social media. "
+        "If the content is abstract or challenging to summarize, indicate this."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, social_media_summary_schema)
 
-# 15. Visual Style Analysis Endpoint
 @app.post("/analyze-video/visual-style", response_model=VideoAnalysisResponse)
 async def analyze_visual_style(request: VideoAnalysisRequest):
-    """
-    Analyze the visual style and aesthetic elements used in the video.
-    """
     prompt = (
-        "Analyze the visual style of the video, discussing elements such as color schemes, cinematography, visual effects, and overall aesthetic appeal. "
-        "Explain how these elements contribute to the video's mood and message."
+        "Describe the visual style of the video, including color schemes, cinematography, and any notable visual effects. "
+        "If the style is minimal or unremarkable, indicate this."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, visual_style_schema)
 
-# 16. Anomaly Detection Endpoint
 @app.post("/analyze-video/anomalies", response_model=VideoAnalysisResponse)
 async def detect_anomalies(request: VideoAnalysisRequest):
-    """
-    Detect any unusual or unexpected events in the video.
-    """
     prompt = (
-        "Analyze the video to detect any unusual or unexpected events or anomalies. "
-        "Provide details and time frames (in seconds) for each detected anomaly."
+        "Identify any unusual or unexpected events in the video, with time frames for each. "
+        "If no anomalies are detected, state that the content is consistent."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, anomalies_schema)
 
-# 17. Gesture Recognition Endpoint
 @app.post("/analyze-video/gestures", response_model=VideoAnalysisResponse)
 async def recognize_gestures(request: VideoAnalysisRequest):
-    """
-    Identify and interpret significant gestures made by individuals in the video.
-    """
     prompt = (
-        "Identify and interpret any significant gestures made by individuals in the video. "
-        "Provide descriptions and the time frames (in seconds) when they occur."
+        "Identify significant gestures made by individuals in the video, with descriptions and time frames. "
+        "If no meaningful gestures are observed, indicate this."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, gestures_schema)
 
-# 18. Topic/Genre Identification Endpoint
 @app.post("/analyze-video/topics", response_model=VideoAnalysisResponse)
 async def identify_topics(request: VideoAnalysisRequest):
-    """
-    Determine the main topics and subtopics discussed in the video.
-    """
     prompt = (
-        "Analyze the video and determine its main topics or genres. "
-        "For each topic or genre, provide a brief description of why it is relevant, and list subtopics if applicable. "
-        "Structure the output as a JSON array of topics, each containing a 'topic' field and a list of 'subtopics' if available. "
-        "Ensure that the topics cover the major themes or subject areas depicted in the video."
+        "Determine the main topics or genres covered in the video, with relevant subtopics where applicable. "
+        "If no specific topics stand out, describe the content as general."
     )
-    video_path = None
-    try:
-        _, _, video_path = download_and_extract_metadata(request.cdn_url)
-        video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
-        return VideoAnalysisResponse(result=result)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        if video_path:
-            delete_temp_file(video_path)
+    return await analyze_video(request, prompt, topics_schema)
 
-# 19. Video Moderation Endpoint
 @app.post("/analyze-video/moderation", response_model=VideoAnalysisResponse)
 async def moderate_content(request: VideoAnalysisRequest):
-    """
-    Detect and report any inappropriate or restricted content in the video, with time frames and details.
-    """
     prompt = (
-        "Analyze the video for any inappropriate, offensive, or restricted content, such as violence, nudity, explicit language, or hate speech. "
-        "For each instance of such content, provide details including the time frames (in seconds) where it occurs. "
-        "Structure the output as a JSON array of objects, each containing a 'type' of inappropriate content and the 'time_frame' when it appears."
+        "Analyze the video for any inappropriate, offensive, or restricted content, such as violence, nudity, or explicit language. "
+        "If the video contains no such content, clearly state that it appears safe and appropriate."
     )
+    return await analyze_video(request, prompt, moderation_schema)
+
+# New Contextual Ad Placement Endpoint
+@app.post("/analyze-video/contextual-ad-placement", response_model=VideoAnalysisResponse)
+async def suggest_ad_placement(request: VideoAnalysisRequest):
+    prompt = (
+        "Suggest appropriate time frames for placing contextual ads in the video, with a brief context of the content at that time. "
+        "If the video lacks suitable points for ad placement, indicate this clearly."
+    )
+    return await analyze_video(request, prompt, ad_placement_schema)
+
+# Unified function to handle video analysis with schema
+async def analyze_video(request: VideoAnalysisRequest, prompt: str, schema: dict) -> VideoAnalysisResponse:
     video_path = None
     try:
         _, _, video_path = download_and_extract_metadata(request.cdn_url)
         video_part = convert_video_to_part(video_path)
-        result = generate_content(multimodal_model, prompt, video_part)
+        result = generate_content(multimodal_model, prompt, video_part, schema)
         return VideoAnalysisResponse(result=result)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
